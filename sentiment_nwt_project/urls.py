@@ -16,9 +16,23 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from ESA import views
+from ESA import views as esa_views
+from ESA1 import views as esa1_views
+from ESA2 import views as esa2_views
+from ESA3 import views as esa3_views
+from ESA4 import views as esa4_views
+from ESA5 import views as esa5_views
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('analyze/', views.email_sentiment_analysis, name='analyze_email')
+    path('', esa_views.email_sentiment_analysis, name='analyze_email'),
+    path('data/', esa_views.email_list, name='email_list'),
+    path('es/', esa1_views.esa1, name='esa1'),
+    path('es2/',esa2_views.esa2, name='esa2'),
+    path('es3/',esa3_views.esa3, name='esa3'),
+    path('es4/',esa4_views.esa4,name='esa4'),
+    path('es5/',esa5_views.esa5,name='esa5'),
+
+    
 ]

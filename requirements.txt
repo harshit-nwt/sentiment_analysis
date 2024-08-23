@@ -1,0 +1,9 @@
+Django==4.2.14
+celery
+redis
+django-celery-results
+python-dotenv
+gunicorn
+transformers
+torch
+emoji

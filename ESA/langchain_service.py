@@ -1,27 +1,69 @@
 # your_app/langchain_service.py
-import openai
 from django.conf import settings
+from transformers import pipeline
+import time
+import emoji
 
-# Set up your OpenAI API key
-openai.api_key = settings.OPENAI_API_KEY
+from .models import EmailAnalysis
 
-def analyze_sentiment(text):
-    # Create a prompt for categorization
-    prompt = (
-        "Categorize the following email into one of the following categories: "
-        "'Complaint', 'Feedback', 'Request'. If none of these fit, return 'Other'.'along with probability.'also print the time consumed.'\n\n"
-        f"Email: {text}\n\n"
-        "Category:"
-    )
+def preprocess_text(text):
+    return emoji.demojize(text)  # Convert emojis to text
+
+def transform_berttweet_response(response):
+    # Map BERTweet categories to Hugging Face format
+    category_mapping = {
+        'POS': 'POSITIVE',
+        'NEG': 'NEGATIVE'
+    }
+    return {
+        'Category': category_mapping.get(response['Category'], 'UNKNOWN'),
+        'Probability': response['Probability'],
+        'Time_Consumed': response['Time_Consumed']
+    }
+
+def get_huggingface_result(text):
+    # Start timing
+    text = preprocess_text(text)
+    start_time = time.time()
     
-    # Generate a response using the OpenAI model
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",  # or another supported model
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt}
-        ]
-    )
+    # Load the sentiment analysis pipeline
+    sentiment_analysis = pipeline("text-classification", model="distilbert/distilbert-base-uncased-finetuned-sst-2-english")
     
-    # Extract and return the category from the response
-    return response['choices'][0]['message']['content'].strip()
+    # Analyze sentiment using the Hugging Face model
+    result = sentiment_analysis(text)[0]
+    
+    # Stop timing
+    end_time = time.time()
+    time_consumed = end_time - start_time
+    
+    # Extract and return the result
+    hf_result = {
+        "Category": result['label'],
+        "Probability": result['score'],
+        "Time_Consumed": time_consumed
+    }
+    return hf_result
+
+def get_berttweet_result(text):
+    # Start timing
+    text = preprocess_text(text)
+    start_time = time.time()
+    
+    # Load the sentiment analysis pipeline for BERTweet model
+    sentiment_analysis_berttweet = pipeline("text-classification", model="finiteautomata/bertweet-base-sentiment-analysis")
+    
+    # Analyze sentiment using the BERTweet model
+    result_berttweet = sentiment_analysis_berttweet(text)[0]
+    
+    # Stop timing
+    end_time = time.time()
+    time_consumed = end_time - start_time
+    
+    # Extract and transform the result for BERTweet model
+    raw_result = {
+        "Category": result_berttweet['label'],
+        "Probability": result_berttweet['score'],
+        "Time_Consumed": time_consumed
+    }
+    bertweet_result = transform_berttweet_response(raw_result)
+    return bertweet_result

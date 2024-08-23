@@ -38,7 +38,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'ESA'
+    'ESA',
+    'ESA1',
+    'ESA2',
+    'ESA3',
+    'ESA4',
+    'ESA5',
+    'django_celery_results',
+    
 ]
 
 MIDDLEWARE = [
@@ -128,4 +135,14 @@ load_dotenv()
 
 # Access the OpenAI API key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-
+#CELERY SETTINGSb  
+CELERY_BROKER_URL = 'redis://redis:6379/0'
+CELERY_RESULT_BACKEND = 'redis://redis:6379/0'
+CELERY_RESULT_EXTENDED = True
+# CELERY_BEAT_SCHEDULE = {
+#     'every-10-secs':{
+#         'task': 'ESA3.tasks.clear_session_cache',
+#         'schedule':10,
+#         'args':('11111',)
+#     }
+# }

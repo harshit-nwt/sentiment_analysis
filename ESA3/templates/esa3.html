@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+
+{% block title %}
+ESA1 - Sentiment Analysis
+{% endblock %}
+
+{% block content %}
+<h2>ESA3 Page Content</h2>
+<p>This is the content specific to the ESA3 page.</p>
+<h3>Multiplication of two numbers</h3>
+<form method="POST">
+{% csrf_token %}
+<input placeholder="enter number 1" name="number1"></input>
+<input placeholder="enter number 2" name="number2"></input>
+<button>Submit</button>
+<h6>Multiplication is:{{ mul }}</h6>
+</form>
+{% endblock %}

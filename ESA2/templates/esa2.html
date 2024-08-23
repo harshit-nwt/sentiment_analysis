@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+
+{% block title %}
+ESA1 - Sentiment Analysis
+{% endblock %}
+
+{% block content %}
+<h2>ESA2 Page Content</h2>
+<p>This is the content specific to the ESA2 page.</p>
+<form method="POST">
+    {% csrf_token %}
+    <input placeholder="Entert text to analyze sentiment" name="email_content1"></input>
+    <input placeholder="Entert text to analyze sentiment" name="email_content2"></input>
+    <input placeholder="Entert text to analyze sentiment" name="email_content3"></input>
+    <input placeholder="Entert text to analyze sentiment" name="email_content4"></input>
+    <input placeholder="Entert text to analyze sentiment" name="email_content5"></input>
+    <button>Submit</button>
+    <h6>Analyzed Sentiment 1:{{ result1 }}</h6>
+    <h6>Analyzed Sentiment 2:{{ result2 }}</h6>
+    <h6>Analyzed Sentiment 3:{{ result3 }}</h6>
+    <h6>Analyzed Sentiment 4:{{ result4 }}</h6>
+    <h6>Analyzed Sentiment 5:{{ result5 }}</h6>
+    </form>
+{% endblock %}

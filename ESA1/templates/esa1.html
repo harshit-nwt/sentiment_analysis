@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+
+{% block title %}
+ESA1 - Sentiment Analysis
+{% endblock %}
+
+{% block content %}
+<h2>ESA1 Page Content</h2>
+<p>This is the content specific to the ESA1 page.</p>
+<form method="POST">
+{% csrf_token %}
+<input placeholder="Entert text to analyze sentiment" name="email_content"></input>
+<button>Submit</button>
+<h6>Analyzed Sentiment:{{ hugging_face_model }}</h6>
+</form>
+{% endblock %}
