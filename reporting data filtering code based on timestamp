@@ -1,0 +1,114 @@
+@shared_task(bind=True, max_retries=3)
+def reporting_task(self, analytic_id, date_range=None):
+    task_id = self.request.id
+
+    def update_task_status(status, description=None):
+        _data = {
+            "task_id": task_id,
+            "status": config.TASK_STATUS.get(status),
+        }
+        if description:
+            _data["description"] = description[:300]
+        
+        try:
+            task_exists = services.get(f"{config.TARGET_PATH.get('task_status')}/{task_id}")
+            if not task_exists:
+                logger.warning(f"Task {task_id} not registered, attempting to register...")
+                response = services.post(data=_data, target_path=config.TARGET_PATH.get("task_status"))
+
+                logger.info(f"Task status update response: {response}")
+                return response
+        except Exception as e:
+            logger.warning(f"Failed to update task status: {str(e)}")
+            return None
+
+    try:
+        update_task_status('STARTED')
+        logger.info(f"Starting reporting task for analytic_id: {analytic_id}, task_id: {task_id}")
+
+        try:
+            # First, let's check if the record exists without date filtering
+            normalized_id = str(uuid.UUID(str(analytic_id)))
+            logger.info(f"Normalized analytic_id: {normalized_id}")
+            
+            # Base query for analytic_id
+            base_query = {
+                "$or": [
+                    {"analytic_id": Binary.from_uuid(uuid.UUID(normalized_id))},
+                    {"analytic_id": normalized_id},
+                    {"analytic_id": str(normalized_id)}
+                ]
+            }
+
+            # First check if record exists at all
+            record = mongo_connection.find_record("analyzed_records", base_query)
+            if not record:
+                sample_records = mongo_connection.find_records("analyzed_records", {})[:2]
+                logger.warning(f"No record found with any analytic_id format. Sample records:")
+                for idx, sample in enumerate(sample_records):
+                    logger.warning(f"Sample {idx + 1}: {sample}")
+                raise Exception(f"No record found with the given analytic_id: {analytic_id}")
+
+            logger.info(f"Found record: {record}")
+            
+            # If record exists and date_range is provided, apply date filtering
+            if date_range:
+                # Find the latest timestamp in the records
+                latest_timestamp = max(
+                    metric.get('timestamp', 0) 
+                    for metric in record.get('individual_metrics', [])
+                ) if record.get('individual_metrics') else 0
+                
+                logger.info(f"Latest record timestamp: {latest_timestamp}")
+                
+                # Calculate filter timestamp based on latest record
+                if date_range == '7days':
+                    date_filter = latest_timestamp - (7 * 24 * 60 * 60)
+                elif date_range == '30days':
+                    date_filter = latest_timestamp - (30 * 24 * 60 * 60)
+                elif date_range == '90days':
+                    date_filter = latest_timestamp - (90 * 24 * 60 * 60)
+                elif date_range == '1year':
+                    date_filter = latest_timestamp - (365 * 24 * 60 * 60)
+                
+                logger.info(f"Latest timestamp: {latest_timestamp}")
+                logger.info(f"Filter timestamp: {date_filter}")
+
+                if date_filter and "individual_metrics" in record:
+                    # Filter the metrics in memory
+                    original_count = len(record["individual_metrics"])
+                    filtered_metrics = [
+                        metric for metric in record["individual_metrics"]
+                        if metric.get("timestamp", 0) >= date_filter
+                    ]
+                    record["individual_metrics"] = filtered_metrics
+                    logger.info(f"Filtered metrics from {original_count} to {len(filtered_metrics)} items")
+                    
+                    # Log some sample timestamps for debugging
+                    if record["individual_metrics"]:
+                        sample_timestamps = [m.get("timestamp") for m in record["individual_metrics"][:3]]
+                        logger.info(f"Sample timestamps after filtering: {sample_timestamps}")
+            
+            # Convert IDs to strings
+            if "_id" in record:
+                record["_id"] = str(record["_id"])
+            if "analytic_id" in record:
+                record["analytic_id"] = str(record["analytic_id"])
+
+            update_task_status('SUCCESS', "Record retrieved successfully")
+            return record
+
+        except Exception as query_error:
+            logger.warning(f"Query attempt failed. Error: {str(query_error)}")
+            raise Exception(f"Failed to retrieve record for analytic_id: {analytic_id}")
+
+    except Exception as e:
+        mes = f"Task failure. Error: {str(e)}"
+        logger.error(mes)
+        update_task_status('FAILURE', mes[:300])
+
+        if self.request.retries < self.max_retries:
+            logger.info(f"Retrying task. Attempt {self.request.retries + 1} of {self.max_retries + 1}")
+            raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        else:
+            raise Exception(mes[:300])
