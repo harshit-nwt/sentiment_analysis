@@ -1,0 +1,37 @@
+@router.post("/reports/", 
+    response=AnalyticsExecuteTaskSchemaWithRecord,
+    operation_id="reportingTask",
+    by_alias=True)
+def analyze_report(request, payload: AnalyticsExecuteTaskSchema):
+    import json
+    logger.info(f"Received request payload: {payload.dict()}")
+    try:
+        # Start a database transaction
+        with transaction.atomic():
+            # Create the task entry in the database
+            task = Task.objects.create(
+                status=config.TASK_STATUS.get('PENDING')
+            )
+            date_range = payload.date_range if hasattr(payload, 'date_range') else None
+            logger.info(f"Received payload with date_range: {date_range}")
+            logger.info(f"Calling task with id: {payload.id}, date_range: {date_range}")
+
+            # Ensure task is saved to the database before starting the async task
+            def trigger_task():
+                async_task = reporting_task.apply_async(args=[payload.id], kwargs={'date_range': date_range}, countdown=2.000)
+                task.id = async_task.id  # Update the task id after async call
+                task.save()
+
+            # Ensure the task is triggered only after the database commit
+            transaction.on_commit(trigger_task)
+
+        # Return the task details in response
+        result = reporting_task.apply_async(args=[payload.id], kwargs={'date_range': date_range}, countdown=2.000).get()
+        # logger.info(f"final result {result}")
+        return AnalyticsExecuteTaskSchemaWithRecord(
+           
+            record=result # Assuming the task result is what you want to return as the record
+        )
+    except Exception as e:
+        logger.error(f"Error executing task: {e}")
+        raise HttpError(500, "Internal server error")
