@@ -1,0 +1,4 @@
+class AnalyticsExecuteTaskSchema(Schema):
+    task_name: Optional[str]  # The name of the task to be executed
+    id: Optional[UUID]
+    date_range: Optional[str] = None  
