@@ -1,0 +1,1203 @@
+'use client'
+
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createRoot } from 'react-dom/client';
+import { useQuery } from '@tanstack/react-query';
+import axios from 'axios';
+import { 
+  AreaChart, Area, LineChart, Line, BarChart, Bar, PieChart, Pie, RadarChart, Radar, 
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Cell
+} from 'recharts';
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge" 
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { BarChart2, Smile, TriangleAlert, Search, Calendar, RefreshCw, MessageSquare, Save, Share2, X, ChevronDown, Download, Loader2, FileText } from 'lucide-react'
+import { useToast } from "@/components/ui/use-toast"
+import { Label } from "@/components/ui/label"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";  
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import Loader from '@/components/logos/Loader.jsx'
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82ca9d'];
+
+const formatPercentage = (value) => {
+  if (value === undefined || value === null) return 'N/A';
+  return `${(value * 100).toFixed(0)}%`;
+};
+
+const extractMentions = (text) => {
+  const mentionRegex = /@(\w+)/g;
+  return text.match(mentionRegex) || [];
+};
+
+const fetchDashboardData = async ({ queryKey }) => {
+  const [_, analyticId, dateRange] = queryKey;
+  if (!analyticId) {
+    throw new Error('Analytic ID is required');
+  }
+
+  console.log('Making API request with date_range:', dateRange);
+
+  const requestData = {
+    task_name: "reporting_task",
+    id: analyticId,
+    date_range: dateRange  // Add date_range directly to the payload
+  };
+
+  console.log('Request payload:', requestData);
+
+  const response = await axios.post('/api/v1/analytics/reports/', requestData);
+  
+  const comments = response.data.record?.individual_metrics?.map(item => ({
+    text: item.data,
+    score: item.general?.score ?? 0,
+    sentiment: item.general?.category ?? 'Unknown',
+    review_id: item.review_id,
+    timestamp: item.timestamp,
+    mentions: extractMentions(item.data), // Extract mentions from comment text
+    individual_metrics: {
+      emotions: item.emotions ?? {},
+      // Add other individual metrics as needed
+    }
+  })) ?? []; 
+  
+  console.log('Comments:', comments);
+  return {
+    ...response.data,
+    record: {
+      ...response.data.record,
+      comments: comments
+    }
+  };
+}; 
+
+const LoadingSpinner = () => (
+  <div className="flex items-center justify-center h-full w-full min-h-[200px]">
+   <Loader />
+  </div>
+);  
+
+// Move chartTypes outside the component
+const chartTypes = [
+  { name: "Area", component: AreaChart },
+  { name: "Line", component: LineChart },
+  { name: "Bar", component: BarChart, renderChart: (data, dataKey) => <Bar dataKey={dataKey} fill="#8884d8" /> },
+];
+
+const formatTimestamp = (timestamp) => {
+  const date = new Date(timestamp * 1000); // Convert Unix timestamp to milliseconds
+  return date.toLocaleDateString(); // Format the date as needed
+};
+
+export default function AnalyticsAdvanced({ analyticId, onClose }) {
+  const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState("overview");
+  const [activeChartIndex, setActiveChartIndex] = useState(0);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [commentChartType, setCommentChartType] = useState("pie");
+  const [selectedMetric, setSelectedMetric] = useState("score");
+  const [responses, setResponses] = useState({});
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
+  const [currentCommentIndex, setCurrentCommentIndex] = useState(null);
+  const [generatedResponses, setGeneratedResponses] = useState({});
+  const [mentionFilter, setMentionFilter] = useState("");
+  const [dateRange, setDateRange] = useState("7days");
+
+  const handleDateRangeChange = useCallback((value) => {
+    console.log('Changing date range to:', value);
+    setDateRange(value);
+  }, []);
+
+  const { data: dashboardData, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['dashboardData', analyticId, dateRange],
+    queryFn: fetchDashboardData,
+    refetchOnWindowFocus: false,
+    enabled: !!analyticId,
+    onSuccess: (data) => {
+      console.log("Query successful with date range:", dateRange);
+      toast({
+        title: "Report Generated",
+        description: `Advanced report has been generated for ${dateRange} period.`,
+      });
+    },
+    onError: (error) => {
+      console.error("Error fetching dashboard data:", error);
+      toast({
+        title: "Error",
+        description: `Failed to generate advanced report: ${error.message}`,
+        variant: "destructive",
+      });
+    }
+  });
+
+  const filteredComments = useMemo(() => {
+    if (!dashboardData?.record?.comments) return [];
+    
+    // If there's no mention filter, return all comments
+    if (!mentionFilter.trim()) {
+      return dashboardData.record.comments;
+    }
+
+    
+
+    // Filter for Twitter mentions
+    return dashboardData.record.comments.filter(comment => {
+      const mentions = extractMentions(comment.text);
+      return mentions.some(mention => 
+        mention.toLowerCase().includes(mentionFilter.toLowerCase())
+      );
+    });
+  }, [dashboardData, mentionFilter]);
+
+  const handleMentionSearch = (e) => {
+    const value = e.target.value;
+    // Remove @ if user types it, we'll add it back
+    const searchTerm = value.replace('@', '').trim();
+    setMentionFilter(searchTerm);
+  };
+
+  const emotionsData = useMemo(() => { 
+    if (!dashboardData?.record?.timeseries?.emotions) return [];
+    return Object.entries(dashboardData.record.timeseries.emotions).map(([key, value]) => ({        
+      name: key, 
+      value: value[value.length - 1]?.[1] ?? 0
+    }));
+  }, [dashboardData]);                                                            
+
+  const sentimentData = useMemo(() => {
+    if (!dashboardData?.record?.aggregated_metrics?.ratios) return [];                    
+    return [                                                                  
+      { name: "Positive", value: dashboardData.record.aggregated_metrics.ratios.positive ?? 0 },                     
+      { name: "Neutral", value: dashboardData.record.aggregated_metrics.ratios.neutral ?? 0 },               
+      { name: "Negative", value: dashboardData.record.aggregated_metrics.ratios.negative ?? 0 },
+    ];
+  }, [dashboardData]);
+
+  const renderPieChart = useCallback((data, dataKey, nameKey) => {
+    if (isLoading) return <LoadingSpinner />;
+    if (!data || data.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-[300px] bg-gray-50 rounded-lg">
+          <p className="text-gray-500">No data available</p>
+        </div>
+      );
+    }
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <PieChart>
+          <Pie
+            data={data}
+            cx="50%"
+            cy="50%"
+            labelLine={false}
+            outerRadius={80}
+            fill="#8884d8"
+            dataKey={dataKey}
+            nameKey={nameKey}
+            label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+          >
+            {data.map((entry, index) => (
+              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+            ))}
+          </Pie>
+          <Tooltip />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    );
+  }, [isLoading]);
+
+  const renderRadarChart = useCallback((data) => {
+    if (isLoading) return <LoadingSpinner />;
+    if (!data || data.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-[300px] bg-gray-50 rounded-lg">
+          <p className="text-gray-500">No data available</p>
+        </div>
+      );
+    }
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={data}>
+          <PolarGrid />
+          <PolarAngleAxis dataKey="name" />
+          <PolarRadiusAxis angle={30} domain={[0, 1]} />
+          <Radar name="Emotions" dataKey="value" stroke="#8884d8" fill="#8884d8" fillOpacity={0.6} />
+          <Legend />
+        </RadarChart>
+      </ResponsiveContainer>
+    );
+  }, [isLoading]);
+
+  const renderCommentChart = useCallback(() => {
+    if (isLoading) return <LoadingSpinner />;
+    if (!dashboardData?.record?.comments) {
+      return (
+        <div className="flex items-center justify-center h-[300px] bg-gray-50 rounded-lg">
+          <p className="text-gray-500">No comment data available</p>
+        </div>
+      );
+    }
+
+    const commentData = dashboardData.record.comments;
+
+    if (commentChartType === "pie") {
+      const sentimentCounts = commentData.reduce((acc, comment) => {
+        acc[comment.sentiment] = (acc[comment.sentiment] || 0) + 1;
+        return acc;
+      }, {});
+      const pieData = Object.entries(sentimentCounts).map(([key, value]) => ({ name: key, value }));
+      return renderPieChart(pieData, "value", "name");
+    } else {
+      return (
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={commentData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis tick={false} />
+            <YAxis />
+            <Tooltip 
+              content={({ payload, label }) => {
+                if (payload && payload.length) {
+                   const comment = payload[0].payload; 
+                  return (
+                    <div className="bg-white p-2 border border-gray-200 rounded shadow">
+                      <p className="text-sm">{`Value: ${payload[0].value.toFixed(2)}`}</p>
+                      <p className="text-sm text-gray-600 mt-1">{comment.text}</p>
+                    </div>
+                  );
+                }
+                return null;
+              }}
+            />
+            <Legend />
+            <Bar 
+              dataKey={selectedMetric} 
+              fill="#8884d8"
+              isAnimationActive={true}
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
+  }, [isLoading, dashboardData, commentChartType, selectedMetric, renderPieChart]);
+
+  const handleRefresh = useCallback(() => {
+    refetch();
+  }, [refetch]);
+
+  const generateResponse = async (index, comment) => {
+    console.log('Generating response for comment:', comment.text);
+    try {
+      const response = await axios.post('/api/v1/analytics/generate-responses/', {
+        review_text: comment.text
+      });
+      console.log('Generated responses:', response.data);
+      setGeneratedResponses(response.data);
+      setCurrentCommentIndex(index);
+      setIsPopupOpen(true);
+    } catch (error) {
+      console.error('Error generating responses:', error);
+      toast({
+        title: "Error",
+        description: "Failed to generate responses. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleResponseSelect = (selectedResponse) => {
+    setResponses(prevResponses => ({
+      ...prevResponses,
+      [currentCommentIndex]: generatedResponses[selectedResponse]
+    }));
+    setIsPopupOpen(false);
+  };
+
+  const postResponse = async (index) => {
+    const comment = dashboardData?.record?.comments?.[index];
+    const response = responses[index];
+    console.log('Posting response:', response);
+
+    if (!response) {
+      toast({
+        title: "Error",
+        description: "Please generate or type a response before posting.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!comment?.review_id) {
+      toast({
+        title: "Error",
+        description: "Unable to post response. Missing review ID.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const result = await axios.post('/api/v1/analytics/post-reply/', {
+        tweet_id: comment.review_id,
+        text: response,
+        analytics_id: analyticId
+      });
+      console.log('Posting result:', result);
+
+      if (result.data.success) {
+        toast({
+          title: "Success",
+          description: `Reply posted successfully.`,
+        });
+      } else {
+        throw new Error("Failed to post reply");
+      }
+    } catch (error) {
+      console.error('Error posting reply:', error);
+      toast({
+        title: "Error",
+        description: "Failed to post reply. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const generateReport = async () => {
+    try {
+      toast({
+        title: "Generating Report",
+        description: "Please wait while we prepare your report...",
+      });
+
+      // Get all required data
+      const mainContent = document.querySelector('.min-h-screen').cloneNode(true);
+
+      // Remove interactive buttons, search, and other unnecessary elements
+      const elementsToRemove = mainContent.querySelectorAll('button, input[type="search"], [role="tablist"]');
+      elementsToRemove.forEach(el => el.remove());
+
+      // Format comments section with page breaks
+      const commentsHtml = dashboardData?.record?.comments
+        ?.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .map((comment, index) => {
+          // Escape any HTML in the comment text
+          const escapedText = comment.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          const commentDate = formatTimestamp(comment.timestamp);
+          
+          return `
+            <div class="comment-card" style="margin-bottom: 16px; padding: 15px; border: 1px solid #eee; border-radius: 8px; page-break-inside: avoid;">
+              <div style="margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center;">
+                <strong>Comment #${index + 1}</strong>
+                <span style="color: #666; font-size: 0.9em;">${commentDate}</span>
+              </div>
+              <div style="display: flex; align-items: flex-start; gap: 12px;">
+                <div style="flex: 1; word-break: break-word; white-space: pre-wrap;">${escapedText}</div>
+                <div style="color: #666; font-size: 0.9em; white-space: nowrap;">
+                  <span> <span style="color: ${
+                    comment.sentiment === 'VERY_POSITIVE' || comment.sentiment === 'SOMEWHAT_POSITIVE' || comment.sentiment === 'POSITIVE' ? '#22c55e' : 
+                    comment.sentiment === 'VERY_NEGATIVE' || comment.sentiment === 'SOMEWHAT_NEGATIVE' || comment.sentiment === 'NEGATIVE' ? '#ef4444' :
+                    comment.sentiment === 'UNDECIDED' || comment.sentiment === 'NEUTRAL' ? '#eab308' : '#666'
+                  }">${comment.sentiment || 'N/A'}</span></span>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('') || '<p>No comments available</p>';
+
+      // Create report HTML content with print-specific styles
+      const reportHtml = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Analytics Report</title>
+            <style>
+              @media print {
+                body { 
+                  margin: 20px;
+                  background: white;
+                }
+                .card { 
+                  break-inside: avoid;
+                  margin-bottom: 20px;
+                  border: 1px solid #eee;
+                  padding: 15px;
+                  border-radius: 8px;
+                }
+                .chart-container { break-inside: avoid; }
+                .comment-card { break-inside: avoid; }
+              }
+              body { 
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 20px;
+              }
+              .header { 
+                text-align: center;
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid #eee;
+              }
+              .section {
+                margin-bottom: 30px;
+              }
+              .section-title {
+                font-size: 1.5em;
+                margin-bottom: 15px;
+                color: #2563eb;
+              }
+              .comments-section {
+                margin-top: 38px;
+                page-break-before: always;
+              }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>Analytics Report</h1>
+              <p>Generated on: ${new Date().toLocaleString()}</p>
+             
+            </div>
+            ${mainContent.outerHTML}
+            
+            <div class="comments-section">
+              <h2 class="section-title">Comments Analysis</h2>
+              ${commentsHtml}
+            </div>
+            
+            <div class="footer">
+              <p style="text-align: center; margin-top: 30px; color: #666;">
+                End of Report - Generated by Analytics Dashboard
+              </p>
+            </div>
+          </body>
+        </html>
+      `;
+
+      // First generate and trigger PDF download
+      const element = document.createElement('div');
+      element.innerHTML = reportHtml;
+      document.body.appendChild(element);
+
+      html2canvas(element).then(canvas => {
+        document.body.removeChild(element);
+        
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const imgWidth = 210;
+        const pageHeight = 297; // A4 height
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        
+        // Calculate number of pages needed
+        const pagesCount = Math.ceil(imgHeight / pageHeight);
+        
+        // Add image page by page
+        for (let page = 0; page < pagesCount; page++) {
+          if (page > 0) {
+            pdf.addPage();
+          }
+          
+          // Calculate the height of the slice for current page
+          const position = -page * pageHeight;
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        }
+        
+        pdf.save(`analytics-report.pdf`);
+      });
+
+      
+
+      toast({
+        title: "Success", 
+        description: "Report generated successfully! Preview opened in new tab.",
+      });
+
+    } catch (error) {
+      console.error('Error generating report:', error);
+      toast({
+        title: "Error",
+        description: "Failed to generate report. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Update the renderChart function
+  const renderChart = useCallback((data, dataKeys) => {
+    if (isLoading) return <LoadingSpinner />;
+    if (!data || data.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-[300px] bg-gray-50 rounded-lg">
+          <p className="text-gray-500">No data available</p>
+        </div>
+      );
+    }
+
+    const ChartComponent = chartTypes[activeChartIndex].component;
+    return (
+      <ResponsiveContainer width="100%" height={300}>
+        <ChartComponent data={data}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="date" />
+          <YAxis />
+          <Tooltip />
+          <Legend /> 
+          {Array.isArray(dataKeys) ? (
+            dataKeys.map((key, index) => {
+              if (ChartComponent === AreaChart) {
+                return (
+                  <Area
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={COLORS[index % COLORS.length]}
+                    fill={COLORS[index % COLORS.length]}
+                    fillOpacity={0.3}
+                  />
+                );
+              } else if (ChartComponent === LineChart) {
+                return (
+                  <Line
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={COLORS[index % COLORS.length]}
+                  />
+                );
+              } else {
+                return (
+                  <Bar
+                    key={key}
+                    dataKey={key}
+                    fill={COLORS[index % COLORS.length]}
+                  />
+                );
+              }
+            })
+          ) : (
+            ChartComponent === AreaChart ? (
+              <Area
+                type="monotone"
+                dataKey={dataKeys}
+                stroke="#8884d8"
+                fill="#8884d8"
+                fillOpacity={0.3}
+              />
+            ) : ChartComponent === LineChart ? (
+              <Line
+                type="monotone"
+                dataKey={dataKeys}
+                stroke="#8884d8"
+              />
+            ) : (
+              <Bar
+                dataKey={dataKeys}
+                fill="#8884d8"
+              />
+            )
+          )}
+        </ChartComponent>
+      </ResponsiveContainer>
+    );
+  }, [isLoading, activeChartIndex, chartTypes]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-white border-b border-gray-200">
+          <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
+            <h1 className="text-2xl font-bold text-gray-900">Analytics Advanced</h1>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+          <LoadingSpinner />
+        </main>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <Card className="w-full max-w-md mx-4">
+          <CardHeader>
+            <CardTitle className="text-red-600">Error Loading Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600">{error?.message || 'Failed to load dashboard data'}</p>
+            <Button 
+              className="mt-4 w-full" 
+              onClick={() => refetch()}
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!dashboardData || !dashboardData.record) {
+    return (
+      <Card className="m-4">
+        <CardHeader>
+          <CardTitle>No Data Available</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p>There is no data available for the provided Analytic ID.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const record = dashboardData.record;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold text-gray-900">Analytics Advanced</h1>
+            <div className="flex items-center space-x-4">
+              <Input type="search" placeholder="Search..." onChange={handleMentionSearch} className="max-w-xs" />
+              <Select 
+                value={dateRange} 
+                onValueChange={handleDateRangeChange}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Select date range">
+                    {dateRange === "7days" ? "Last 7 days" :
+                     dateRange === "30days" ? "Last 30 days" :
+                     dateRange === "90days" ? "Last 90 days" :
+                     dateRange === "1year" ? "Last year" : "Select date range"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7days">Last 7 days</SelectItem>
+                  <SelectItem value="30days">Last 30 days</SelectItem>
+                  <SelectItem value="90days">Last 90 days</SelectItem>
+                  <SelectItem value="1year">Last year</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button className="bg-blue-600 text-white hover:bg-blue-700" onClick={handleRefresh}>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
+              <Button 
+                variant="ghost" 
+                onClick={generateReport}
+                title="Download PDF Report"
+              >
+                <FileText className="w-6 h-6 text-red-600 hover:text-red-900" />
+              </Button>
+              <Button variant="outline" onClick={onClose}>
+                <X className="w-4 h-4 mr-2" />
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <Dialog open={isPopupOpen} onOpenChange={setIsPopupOpen}>
+        <DialogContent className="sm:max-w-[600px] sm:max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold mb-4">Choose a Response Template</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <RadioGroup 
+              onValueChange={handleResponseSelect}
+              className="space-y-4"
+            >
+              {Object.entries(generatedResponses).map(([key, value]) => (
+                <div 
+                  key={key} 
+                  className="flex items-start space-x-3 p-3 rounded-lg border border-gray-200 hover:bg-green-100 transition-colors"
+                >
+                  <RadioGroupItem 
+                    value={key} 
+                    id={key} 
+                    className="mt-1"
+                  />
+                  <Label 
+                    htmlFor={key} 
+                    className="flex-grow cursor-pointer text-sm text-gray-600 font-normal leading-relaxed"
+                  >
+                    {value}
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+          </div>
+          <DialogFooter className="mt-6">
+            <Button 
+              variant="outline" 
+              onClick={() => setIsPopupOpen(false)}
+              className="mr-2"
+            >
+              Cancel
+            </Button>
+          
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        {isLoading ? (
+          <LoadingSpinner />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-center space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Comments</CardTitle>
+                <BarChart2 className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent className="text-center">
+                <div className="text-2xl font-bold">{record.meta_data?.num_analysed || 'N/A'}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-center space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Average Sentiment</CardTitle>
+                <Smile className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent className="text-center">
+                <div className="text-2xl font-bold">{formatPercentage(record.aggregated_metrics?.general?.score)}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-center space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Sentiment Volatility</CardTitle>
+                <TriangleAlert className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent className="text-center">
+                <div className="text-2xl font-bold">{record.aggregated_metrics?.general?.category || 'N/A'}</div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+        
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="sentiment">Sentiment Analysis</TabsTrigger>
+            <TabsTrigger value="emotions">Emotion Analysis</TabsTrigger>
+            <TabsTrigger value="comments">Comments</TabsTrigger>
+            <TabsTrigger value="topics">Topic Analysis</TabsTrigger>
+            <TabsTrigger value="insights">AI Insights</TabsTrigger>
+          </TabsList>
+          <TabsContent value="overview" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Sentiment Over Time</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex justify-end space-x-2 mb-4">
+                  {chartTypes.map((type, index) => (
+                    <Button
+                      key={type.name}
+                      variant={activeChartIndex === index ? "default" : "outline"}
+                      onClick={() => setActiveChartIndex(index)}
+                    >
+                      {type.name}
+                    </Button>
+                  ))}
+                </div>
+                {record?.timeseries?.overall && record.timeseries.overall.length > 0 ? (
+                  renderChart(
+                    record.timeseries.overall.map(([date, value]) => ({
+                      date,
+                      value
+                    })),
+                    "value"
+                  )
+                ) : (
+                  <p>No sentiment data available for chart</p>
+                )}
+              </CardContent>
+            </Card>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sentiment Distribution</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {renderPieChart(sentimentData, "value", "name")}
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Emotion Distribution</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {renderRadarChart(emotionsData)}
+                </CardContent>
+              </Card>
+            </div>
+          </TabsContent>
+          <TabsContent value="sentiment" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Sentiment Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Sentiment Distribution</h3>
+                    {renderPieChart(sentimentData, "value", "name")}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Sentiment Over Time</h3>
+                    {record?.timeseries?.ratios && record.timeseries.ratios.pos && record.timeseries.ratios.neu && record.timeseries.ratios.neg ? (
+                      renderChart(
+                        record.timeseries.ratios.pos.map(([date, value], index) => ({
+                          date,
+                          positive: value,
+                          neutral: record.timeseries.ratios.neu[index][1],
+                          negative: record.timeseries.ratios.neg[index][1]
+                        })),
+                        ["positive", "neutral", "negative"]
+                      )
+                    ) : (
+                      <p>No sentiment data available for chart</p>
+                    )}
+                  </div>
+                  <div>
+                  
+                    <ul className="list-disc pl-5">
+                      {record.sentiment_drivers?.map((driver, index) => (
+                        <li key={index}>{driver}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="emotions" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Emotion Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Emotion Distribution</h3>
+                    {renderRadarChart(emotionsData)}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Emotions Over Time</h3>
+                    {record?.timeseries?.emotions ? (
+                      renderChart(
+                        (() => {
+                          const emotions = Object.keys(record.timeseries.emotions);
+                          const firstEmotion = emotions[0];
+                          return record.timeseries.emotions[firstEmotion].map(([date], index) => ({
+                            date,
+                            ...emotions.reduce((acc, emotion) => {
+                              acc[emotion] = record.timeseries.emotions[emotion][index][1];
+                              return acc;
+                            }, {})
+                          }));
+                        })(),
+                        Object.keys(record.timeseries.emotions)
+                      )
+                    ) : (
+                      <p>No emotion data available for chart</p>
+                    )}
+                  </div>
+                  <div>
+                   
+                    <ul className="list-disc pl-5">
+                      {record.emotion_triggers?.map((trigger, index) => (
+                        <li key={index}>{trigger}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="comments" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Comment Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex justify-between items-center mb-4">
+                  <div className="space-x-2">
+                    <Button
+                      variant={commentChartType === "pie" ? "default" : "outline"}
+                      onClick={() => setCommentChartType("pie")}
+                    >
+                      Pie Chart
+                    </Button>
+                    <Button
+                      variant={commentChartType === "bar" ? "default" : "outline"}
+                      onClick={() => setCommentChartType("bar")}
+                    >
+                      Bar Chart
+                    </Button>
+                  </div>
+                  {commentChartType === "bar" && (
+                    <Select value={selectedMetric} onValueChange={setSelectedMetric}>
+                      <SelectTrigger className="w-[180px]">
+                        <SelectValue placeholder="Select metric" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="score">Score</SelectItem>
+                        <SelectItem value="sentiment">Sentiment</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div style={{ height: "400px" }}>
+                  {renderCommentChart()}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Recent Comments</CardTitle>
+                <Select value={commentChartType} onValueChange={setCommentChartType}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="Select chart type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bar">Bar Chart</SelectItem>
+                    <SelectItem value="pie">Pie Chart</SelectItem>
+                  </SelectContent>
+                </Select>
+              </CardHeader>
+              <CardContent>
+              <ScrollArea className="h-[600px]">
+          {filteredComments.length > 0 ? (
+            filteredComments.map((comment, index) => (
+              <div key={index} className="mb-8 p-4 bg-white rounded-lg shadow">
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="w-full md:w-1/3">
+                    {commentChartType === "pie" ? (
+                      <ResponsiveContainer width="100%" height={250}>
+                        <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 24 }}>
+                          <Pie
+                            data={Object.entries(comment.individual_metrics.emotions).map(([key, value]) => ({
+                              name: key,
+                              value: value
+                            }))}
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={50}
+                            fill="#8884d8"
+                            dataKey="value"
+                            nameKey="name"
+                            label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                          >
+                            {Object.entries(comment.individual_metrics.emotions).map((_, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                          <Legend 
+                            layout="horizontal"
+                            verticalAlign="bottom"
+                            align="center"
+                            wrapperStyle={{ paddingTop: "20px" }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={200}>
+                        <BarChart 
+                          data={Object.entries(comment.individual_metrics.emotions).map(([key, value]) => ({
+                            name: key,
+                            value: value
+                          }))}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="value" fill="#8884d8">
+                            {Object.entries(comment.individual_metrics.emotions).map((_, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                  <div className="w-full md:w-2/3">
+                    <p className="text-gray-800 mb-2">{comment.text}</p>
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      <Badge variant={comment.score > 0.6 ? "success" : comment.score < 0.4 ? "destructive" : "default"}>
+                        {comment.score > 0.6 ? "Positive" : comment.score < 0.4 ? "Negative" : "Neutral"}
+                      </Badge>
+                      <Badge variant="secondary">{comment.sentiment}</Badge>
+                      <Badge variant="outline">
+                        <Calendar className="w-3 h-3 mr-1" />
+                        {formatTimestamp(comment.timestamp)}
+                      </Badge>
+                    </div>
+                    <Collapsible>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="outline" className="w-full justify-between">
+                          <span>Respond to Review</span>
+                          <MessageSquare className="h-4 w-4 ml-2" />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-4">
+                        <Textarea
+                          placeholder="Type your response here..."
+                          value={responses[index] || ''}
+                          onChange={(e) => setResponses({ ...responses, [index]: e.target.value })}
+                          className="mb-2"
+                        />
+                        <div className="flex justify-between">
+                          <Button variant="outline" onClick={() => generateResponse(index, comment)}>
+                            Auto-generate
+                          </Button>
+                          <div className="space-x-2">
+                            <Button variant="outline" onClick={() => postResponse(index)}>
+                              <Share2 className="h-4 w-4 mr-2" />
+                              Post
+                            </Button>
+                          </div>
+                        </div>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[200px] text-center">
+              <MessageSquare className="h-12 w-12 text-gray-400 mb-4" />
+              <p className="text-lg font-medium text-gray-900">No Mentions Found</p>
+              <p className="text-sm text-gray-500">
+                No comments found with Twitter mention "{mentionFilter}"
+              </p>
+            </div>
+          )}
+        </ScrollArea>
+              </CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="topics" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Topic Analysis</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Top Topics</h3>
+                    {renderPieChart(record.topic_analysis?.top_topics?.map(topic => ({ name: topic.name, value: topic.weight })) || [], "value", "name")}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">Topic Details</h3>
+                    {record.topic_analysis?.top_topics?.map((topic, index) => (
+                      <Collapsible key={index}>
+                        <CollapsibleTrigger className="flex items-center justify-between w-full p-4 font-medium text-left text-gray-900 bg-gray-100 hover:bg-gray-200 rounded-lg">
+                          <span>{topic.name}</span>
+                          <ChevronDown className="w-5 h-5" />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="p-4 bg-white rounded-lg mt-2">
+                          <p><strong>Weight:</strong> {topic.weight.toFixed(2)}</p>
+                          <p><strong>Keywords:</strong> {topic.keywords.join(", ")}</p>
+                          <p><strong>Example Comments:</strong></p>
+                          <ul className="list-disc pl-5 mt-2">
+                            {topic.example_comments.map((comment, commentIndex) => (
+                              <li key={commentIndex}>{comment}</li>
+                            ))}
+                          </ul>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+          <TabsContent value="insights" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>AI Insights</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {record.ai_insights?.map((insight, index) => (
+                    <Card key={index}>
+                      <CardHeader>
+                        <CardTitle className="text-lg">{insight.title}</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <p>{insight.description}</p>
+                        {insight.recommendations && (
+                          <div className="mt-4">
+                            <h4 className="font-semibold mb-2">Recommendations:</h4>
+                            <ul className="list-disc pl-5">
+                              {insight.recommendations.map((rec, recIndex) => (
+                                <li key={recIndex}>{rec}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>AI Assistant</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex flex-col space-y-2">
+                    <Label htmlFor="user-query">Ask a question about the data:</Label>
+                    <Textarea
+                      id="user-query"
+                      placeholder="e.g., What are the main factors driving negative sentiment?"
+                      value={responses.userQuery || ""}
+                      onChange={(e) => setResponses({ ...responses, userQuery: e.target.value })}
+                    />
+                  </div>
+                  <Button className="w-full" onClick={() => {
+                    // Simulate AI response (replace with actual API call in production)
+                    setResponses({
+                      ...responses,
+                      aiResponse: "Based on the analysis, the main factors driving negative sentiment are product quality issues, long wait times for customer support, and pricing concerns. Specifically, 35% of negative comments mention product defects, 28% complain about support response times, and 22% express dissatisfaction with recent price increases."
+                    });
+                  }}>
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    Get AI Insights
+                  </Button>
+                  {responses.aiResponse && (
+                    <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+                      <h4 className="font-semibold mb-2">AI Response:</h4>
+                      <p>{responses.aiResponse}</p>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      </main>
+    </div>
+  );
+}
